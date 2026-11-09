@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Presto Deck — Web Bluetooth Bridge</title>
+  <style>
+    :root {
+      --bg: #0F131A;
+      --card-bg: #1A212E;
+      --card-border: #2C384A;
+      --accent: #00D2A0;
+      --accent-glow: rgba(0, 210, 160, 0.25);
+      --btn-blue: #0CA0CD;
+      --btn-blue-hover: #0a8fb8;
+      --text-main: #F4F7FC;
+      --text-muted: #8E9DB2;
+      --danger: #FF5C5C;
+      --warning: #FFA834;
+      --code-bg: #111620;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      padding: 24px;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 820px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-badge {
+      width: 38px;
+      height: 38px;
+      background: var(--card-bg);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: var(--accent);
+      font-size: 18px;
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      background: rgba(255, 92, 92, 0.15);
+      border: 1px solid rgba(255, 92, 92, 0.3);
+      color: var(--danger);
+      transition: all 0.3s ease;
+    }
+
+    .status-pill.connected {
+      background: rgba(0, 210, 160, 0.15);
+      border-color: rgba(0, 210, 160, 0.3);
+      color: var(--accent);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-main);
+    }
+
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #0A1016;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      filter: brightness(1.1);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: var(--btn-blue);
+      color: #fff;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--btn-blue-hover);
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+    }
+
+    .btn-outline:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--text-muted);
+    }
+
+    .btn-danger {
+      background: rgba(255, 92, 92, 0.15);
+      border: 1px solid rgba(255, 92, 92, 0.3);
+      color: var(--danger);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(255, 92, 92, 0.25);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 11px 14px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    .pill-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      padding: 6px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pill:hover {
+      border-color: var(--accent);
+      color: var(--text-main);
+    }
+
+    .pill.pill-danger:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .event-log {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 12px;
+      height: 180px;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .event-entry {
+      display: flex;
+      gap: 8px;
+      line-height: 1.4;
+    }
+
+    .event-time {
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .event-tag {
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .tag-tap {
+      background: rgba(0, 210, 160, 0.2);
+      color: var(--accent);
+    }
+
+    .tag-ack {
+      background: rgba(255, 168, 52, 0.2);
+      color: var(--warning);
+    }
+
+    .tag-sys {
+      background: rgba(12, 160, 205, 0.2);
+      color: var(--btn-blue);
+    }
+
+    .event-msg {
+      color: var(--text-main);
+      word-break: break-all;
+    }
+
+    details {
+      border-top: 1px solid var(--card-border);
+      padding-top: 12px;
+    }
+
+    summary {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 12px;
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 12px;
+      color: #CAD5E2;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo-badge">P</div>
+        <div>
+          <h1>Presto Deck Web Bluetooth Bridge</h1>
+          <div class="subtitle">Direct Chrome-to-Presto tab monitor & deck controller</div>
+        </div>
+      </div>
+      <div id="status-pill" class="status-pill">
+        <span class="status-dot"></span>
+        <span id="status-text">Disconnected</span>
+      </div>
+    </header>
+
+    <!-- Bluetooth Connection Card -->
+    <div class="card">
+      <div class="card-title">1. Device Connection</div>
+      <div class="card-desc">
+        Click below to scan and connect directly to your Presto device over Web Bluetooth. Ensure your Presto is powered on and within range.
+      </div>
+      <div class="btn-group">
+        <button id="btn-connect" class="btn-primary" onclick="connectPresto()">
+          Connect to Presto Deck
+        </button>
+        <button id="btn-disconnect" class="btn-danger" onclick="disconnectPresto()" disabled>
+          Disconnect
+        </button>
+      </div>
+    </div>
+
+    <!-- Notification Sender Card -->
+    <div class="card">
+      <div class="card-title">2. Push Notification / Tab Status to Presto</div>
+      <div class="card-desc">
+        Send an alert banner directly to the Presto display. Presto will show an alert badge and ring back an acknowledgment when tapped.
+      </div>
+      <div class="input-row">
+        <input type="text" id="notify-input" placeholder="e.g. CI Build Failed, 3 Unread PRs, Meeting in 5m" />
+        <button id="btn-send-notify" class="btn-secondary" onclick="sendCustomNotification()" disabled>
+          Send to Deck
+        </button>
+      </div>
+      <div class="pill-group">
+        <span class="pill" onclick="quickSend('PR Review Needed (2)')">PR Review Needed (2)</span>
+        <span class="pill" onclick="quickSend('CI Build: Succeeded')">CI Build: Succeeded</span>
+        <span class="pill" onclick="quickSend('CI Build: Failed')">CI Build: Failed</span>
+        <span class="pill" onclick="quickSend('Meeting in 5 min')">Meeting in 5 min</span>
+        <span class="pill" onclick="quickSend('3 Unread Slack DMs')">3 Unread Slack DMs</span>
+        <span class="pill pill-danger" onclick="quickClear()">Clear Notification</span>
+      </div>
+    </div>
+
+    <!-- Live Event Feed Card -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="card-title">3. Live Event Stream from Presto</div>
+        <button class="btn-outline" style="padding:4px 10px; font-size:12px;" onclick="clearLog()">Clear Feed</button>
+      </div>
+      <div class="card-desc">
+        Real-time button taps and notification acknowledgments received from the Presto touch screen.
+      </div>
+      <div id="event-log" class="event-log">
+        <div class="event-entry">
+          <span class="event-time">--:--:--</span>
+          <span class="event-tag tag-sys">SYS</span>
+          <span class="event-msg">Ready. Click "Connect to Presto Deck" to start listening.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Extension Guide Card -->
+    <div class="card">
+      <details>
+        <summary>How to integrate this into a Custom Chrome Extension</summary>
+        <div class="card-desc" style="margin-top: 10px;">
+          You can forward tab updates, notification badges, or media states to Presto from your own Chrome Extension background service worker:
+        </div>
+        <pre><code>// In your Chrome extension service worker or offscreen document:
+// 1. Listen to tab updates (e.g., Jira, GitHub, Slack)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tab.title && tab.title.includes("Pull Request")) {
+    bridgePort.postMessage({ type: "notify", text: "New PR Activity" });
+  }
+});
+
+// 2. Listen to Presto button presses received over Web Bluetooth:
+function onPrestoButtonPress(event) {
+  if (event.action === "mute_tab") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.update(tabs[0].id, { muted: true });
+    });
+  } else if (event.event === "notification_tap") {
+    console.log("User tapped notification on Presto!");
+  }
+}</code></pre>
+      </details>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

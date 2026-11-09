@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Presto BT Deck Bridge",
+  "version": "1.0.0",
+  "description": "Two-way Web Bluetooth bridge connecting Presto Macro Deck with Chrome tabs and workspaces",
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open Presto BT Deck Manager"
+  }
+}

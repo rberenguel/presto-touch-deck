@@ -1,0 +1,9 @@
+[project]
+name = "presto-touch-deck"
+version = "0.1.0"
+description = "Zero-latency touch macro deck and Web Bluetooth bridge for Pimoroni Presto"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mpremote>=1.22.0",
+]
