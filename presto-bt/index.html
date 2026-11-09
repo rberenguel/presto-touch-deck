@@ -224,17 +224,37 @@
           Sync unread count from Gmail tab title to "Gmail" button on Presto
         </label>
       </div>
+      <div class="toggle-row">
+        <label>
+          <input type="checkbox" id="chk-monitor-wa" checked />
+          Sync unread count from WhatsApp Web tab title to "WA" button on Presto
+        </label>
+      </div>
+    </div>
+
+    <!-- Daily Calendar Schedule -->
+    <div class="card">
+      <div class="card-title">3. Daily Schedule (<span style="font-family:monospace;">calendar.md</span>)</div>
+      <div class="card-desc">Format: <span style="font-family:monospace;">- HHMM@MINUTES_BEFORE Event Name</span>. The Presto "Cal" button turns purple showing the event during the reminder window.</div>
+      <textarea id="txt-calendar" rows="4" placeholder="- 0930@10 Daily Standup&#10;- 1430@5 1:1 with Alex&#10;- 1600@5 Team Demo" style="width:100%; background:var(--code); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace; font-size:12px; padding:10px; resize:vertical;"></textarea>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="quick-btn" id="btn-save-cal">Save Schedule</button>
+        <button class="quick-btn" id="btn-test-cal-event" style="border-color:#AA46F0; color:#AA46F0;">Test: Event On</button>
+        <button class="quick-btn" id="btn-test-cal-clear">Test: Event Off</button>
+      </div>
     </div>
 
     <!-- Manual Deck Switch -->
     <div class="card">
-      <div class="card-title">3. Presto Remote Controls & Test Triggers</div>
+      <div class="card-title">4. Presto Remote Controls & Test Triggers</div>
       <div class="quick-decks">
         <button class="quick-btn" id="btn-deck-workspace">Workspace</button>
         <button class="quick-btn" id="btn-deck-gmail">Gmail</button>
-        <button class="quick-btn" id="btn-deck-dev">Dev Deck</button>
-        <button class="quick-btn" id="btn-test-badge-2" style="border-color:var(--warning); color:var(--warning);">Test: Badge (2)</button>
-        <button class="quick-btn" id="btn-test-badge-0">Test: Badge (0)</button>
+        <button class="quick-btn" id="btn-test-badge-2" style="border-color:var(--warning); color:var(--warning);">Test: Gmail (2)</button>
+        <button class="quick-btn" id="btn-test-badge-0">Test: Gmail (0)</button>
+        <button class="quick-btn" id="btn-test-wa-1" style="border-color:var(--accent); color:var(--accent);">Test: WA (1)</button>
+        <button class="quick-btn" id="btn-test-wa-0">Test: WA (0)</button>
+        <button class="quick-btn" id="btn-sync-time">Sync Time</button>
       </div>
     </div>
 

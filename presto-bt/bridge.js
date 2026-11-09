@@ -10,14 +10,21 @@ let txCharacteristic = null;
 // User Config Options
 let autoSwitchDeck = true;
 let monitorUnreadBadge = true;
+let monitorWaBadge = true;
 
 let lastGmailUnread = null;
+let lastWaUnread = null;
+let lastSentTime = null;
 let currentDeckName = 'Workspace';
+let calendarScheduleText = '';
+let activeCalendarKey = null;
 
 // Load stored settings
-chrome.storage.local.get(['autoSwitchDeck', 'monitorUnreadBadge'], (res) => {
+chrome.storage.local.get(['autoSwitchDeck', 'monitorUnreadBadge', 'monitorWaBadge', 'calendarSchedule'], (res) => {
   if (res.autoSwitchDeck !== undefined) autoSwitchDeck = res.autoSwitchDeck;
   if (res.monitorUnreadBadge !== undefined) monitorUnreadBadge = res.monitorUnreadBadge;
+  if (res.monitorWaBadge !== undefined) monitorWaBadge = res.monitorWaBadge;
+  if (res.calendarSchedule !== undefined) calendarScheduleText = res.calendarSchedule;
 });
 
 // UI Callbacks
@@ -29,10 +36,17 @@ export function registerCallbacks(onLog, onStatus) {
   uiStatusCallback = onStatus;
 }
 
-export function setOptions(autoSwitch, monitorUnread) {
+export function setOptions(autoSwitch, monitorUnread, monitorWa) {
   autoSwitchDeck = autoSwitch;
   monitorUnreadBadge = monitorUnread;
-  chrome.storage.local.set({ autoSwitchDeck, monitorUnreadBadge });
+  if (monitorWa !== undefined) monitorWaBadge = monitorWa;
+  chrome.storage.local.set({ autoSwitchDeck, monitorUnreadBadge, monitorWaBadge });
+}
+
+export function setCalendarSchedule(text) {
+  calendarScheduleText = text || '';
+  chrome.storage.local.set({ calendarSchedule: calendarScheduleText });
+  inspectCalendarSchedule(true);
 }
 
 function log(type, message, tagClass = 'tag-sys') {
@@ -41,6 +55,14 @@ function log(type, message, tagClass = 'tag-sys') {
 
 function updateStatus(isConnected, deviceName = '') {
   if (uiStatusCallback) uiStatusCallback(isConnected, deviceName);
+}
+
+function withTimeout(promise, ms, errorMsg) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(errorMsg)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
 // -------------------------------------------------------------
@@ -66,11 +88,14 @@ export async function connectPresto() {
     bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
     const server = await bluetoothDevice.gatt.connect();
-    log('SYS', 'GATT connected. Stabilizing link (350ms)...');
-    await new Promise(r => setTimeout(r, 350));
 
     log('SYS', 'Discovering Nordic UART Service...');
-    const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+    const service = await withTimeout(
+      server.getPrimaryService(NUS_SERVICE_UUID),
+      8000,
+      'Service discovery timed out. Toggle Bluetooth off and on in macOS settings to clear stale GATT cache.'
+    );
+
     rxCharacteristic = await service.getCharacteristic(NUS_RX_UUID);
     txCharacteristic = await service.getCharacteristic(NUS_TX_UUID);
 
@@ -83,7 +108,12 @@ export async function connectPresto() {
 
     // Force-sync state upon fresh connection
     lastGmailUnread = null;
+    lastWaUnread = null;
+    lastSentTime = null;
+    activeCalendarKey = null;
     currentDeckName = null;
+    syncTime(true);
+    inspectCalendarSchedule(true);
     await checkActiveTab();
   } catch (error) {
     console.error('Connection failed:', error);
@@ -109,32 +139,46 @@ function onDisconnected() {
   rxCharacteristic = null;
   txCharacteristic = null;
   bluetoothDevice = null;
+  lastSentTime = null;
+  sendQueue = [];
+  isSending = false;
   updateStatus(false);
 }
 
 // -------------------------------------------------------------
 // 2. Sending Data / Commands to Presto
 // -------------------------------------------------------------
+let sendQueue = [];
+let isSending = false;
+
 export async function sendRaw(str) {
-  if (!rxCharacteristic) {
-    console.warn('[BLE] sendRaw called but rxCharacteristic is null');
-    return;
-  }
-  try {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(str);
-    if (rxCharacteristic.writeValueWithoutResponse) {
-      await rxCharacteristic.writeValueWithoutResponse(data);
-    } else if (rxCharacteristic.writeValueWithResponse) {
-      await rxCharacteristic.writeValueWithResponse(data);
-    } else {
-      await rxCharacteristic.writeValue(data);
+  sendQueue.push(str);
+  if (isSending) return;
+  isSending = true;
+
+  while (sendQueue.length > 0) {
+    const msg = sendQueue.shift();
+    if (rxCharacteristic) {
+      try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(msg);
+        if (rxCharacteristic.writeValueWithoutResponse) {
+          await rxCharacteristic.writeValueWithoutResponse(data);
+        } else if (rxCharacteristic.writeValueWithResponse) {
+          await rxCharacteristic.writeValueWithResponse(data);
+        } else {
+          await rxCharacteristic.writeValue(data);
+        }
+        log('SENT', msg, 'tag-sys');
+      } catch (error) {
+        console.error('[BLE Send Error]', error);
+        log('ERR', `Send error: ${error.message || error}`, 'tag-ack');
+      }
+      // Pace writes so MicroPython event loop never drops/coalesces packets
+      await new Promise(r => setTimeout(r, 45));
     }
-    log('SENT', str, 'tag-sys');
-  } catch (error) {
-    console.error('[BLE Send Error]', error);
-    log('ERR', `Send error: ${error.message || error}`, 'tag-ack');
   }
+  isSending = false;
 }
 
 export function switchDeck(deckName) {
@@ -154,10 +198,46 @@ export function sendAlertNotification(text) {
   sendRaw(`notify:${text}`);
 }
 
+export function sendChunkedEvent(payload) {
+  if (!payload || payload === 'clear') {
+    sendRaw('event:clear');
+    return;
+  }
+  const prefix = 'event:+';
+  const maxBytes = 20 - new TextEncoder().encode(prefix).length; // 13 max payload bytes
+  let cur = '';
+  for (const ch of payload) {
+    if (new TextEncoder().encode(cur + ch).length > maxBytes) {
+      sendRaw(prefix + cur);
+      cur = ch;
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.length > 0) {
+    sendRaw(prefix + cur);
+  }
+  sendRaw('event:eof');
+}
+
+export function syncTime(force = false) {
+  if (!rxCharacteristic) return;
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const timeStr = `${hh}:${mm}`;
+
+  if (force || timeStr !== lastSentTime) {
+    lastSentTime = timeStr;
+    sendRaw(`time:${timeStr}`);
+  }
+}
+
 // -------------------------------------------------------------
 // 3. Handling Events Received from Presto Touchscreen
 // -------------------------------------------------------------
 async function handlePrestoEvent(event) {
+  syncTime(false);
   const value = event.target.value;
   const rawString = new TextDecoder('utf-8').decode(value);
 
@@ -288,6 +368,7 @@ async function runInGmailTab(func) {
 // -------------------------------------------------------------
 // Check active tab and sync deck/button state
 async function checkActiveTab() {
+  syncTime(false);
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
@@ -310,8 +391,75 @@ async function checkActiveTab() {
     if (monitorUnreadBadge) {
       await inspectGmailUnread();
     }
+
+    // Check WhatsApp unread badge across all tabs
+    if (monitorWaBadge) {
+      await inspectWhatsAppUnread();
+    }
+
+    // Check Calendar schedule
+    inspectCalendarSchedule(false);
   } catch (err) {
     console.error('checkActiveTab error:', err);
+  }
+}
+
+// Evaluate daily calendar schedule against current time
+export function inspectCalendarSchedule(force = false) {
+  if (!rxCharacteristic) return;
+  if (!calendarScheduleText || !calendarScheduleText.trim()) {
+    if (activeCalendarKey !== null) {
+      activeCalendarKey = null;
+      sendRaw('event:clear');
+      log('CAL', 'Schedule cleared. Reverting Calendar button.', 'tag-sys');
+    }
+    return;
+  }
+
+  const now = new Date();
+  const curMins = now.getHours() * 60 + now.getMinutes();
+  const lines = calendarScheduleText.split('\n');
+  let currentActive = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Matches: - 1430@5 1:1 with Alex  OR  0930@10 Daily Standup
+    const match = line.match(/^(?:-\s*)?(\d{2})(\d{2})@(\d+)\s+(.+)$/);
+    if (!match) continue;
+
+    const hh = parseInt(match[1], 10);
+    const mm = parseInt(match[2], 10);
+    const minBefore = parseInt(match[3], 10);
+    const label = match[4].trim();
+
+    const eventMins = hh * 60 + mm;
+    const startMins = eventMins - minBefore;
+    const endMins = eventMins; // clears when meeting begins
+
+    if (curMins >= startMins && curMins < endMins) {
+      const timeStr = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+      currentActive = {
+        time: timeStr,
+        label: label
+      };
+      break;
+    }
+  }
+
+  const newKey = currentActive ? `${currentActive.time}:${currentActive.label}` : null;
+  if (newKey !== activeCalendarKey || force) {
+    activeCalendarKey = newKey;
+    if (currentActive) {
+      // Chunked streaming allows long meeting titles without BLE 20-byte truncation
+      const fullPayload = `${currentActive.time}\\n${currentActive.label}`;
+      sendChunkedEvent(fullPayload);
+      log('CAL', `Upcoming event: "${currentActive.label}" at ${currentActive.time}`, 'tag-tap');
+    } else {
+      sendRaw('event:clear');
+      log('CAL', 'Event window passed. Reverting Calendar button.', 'tag-sys');
+    }
   }
 }
 
@@ -335,16 +483,55 @@ async function inspectGmailUnread() {
         lastGmailUnread = count;
         if (count > 0) {
           log('SYNC', `Gmail has ${count} unread email(s)! Setting button color to alert.`, 'tag-tap');
-          sendRaw(`badge:${count}`);
+          sendRaw(`badge:gmail:${count}`);
         } else {
           log('SYNC', 'Gmail has 0 unread emails. Restoring button.', 'tag-sys');
-          sendRaw('badge:0');
+          sendRaw('badge:gmail:0');
         }
       }
       break;
     }
   } catch (err) {
     console.error('inspectGmailUnread error:', err);
+  }
+}
+
+// Find WhatsApp Web tabs and parse unread count from title: e.g. "(3) WhatsApp" or "(*) WhatsApp"
+async function inspectWhatsAppUnread() {
+  try {
+    const allTabs = await chrome.tabs.query({});
+    const waTabs = allTabs.filter(t =>
+      (t.url && (t.url.includes('web.whatsapp.com') || t.url.includes('whatsapp.com'))) ||
+      (t.title && t.title.toLowerCase().includes('whatsapp'))
+    );
+
+    if (waTabs.length === 0) return;
+
+    for (const tab of waTabs) {
+      if (!tab.title) continue;
+      const match = tab.title.match(/\(([^)]+)\)/);
+      let count = 0;
+      if (match) {
+        const raw = match[1].trim();
+        if (raw === '*') count = 1;
+        else if (raw.endsWith('+')) count = parseInt(raw, 10) || 99;
+        else count = parseInt(raw, 10) || 0;
+      }
+
+      if (count !== lastWaUnread) {
+        lastWaUnread = count;
+        if (count > 0) {
+          log('SYNC', `WhatsApp has ${count} unread chat(s)! Setting WA button to alert.`, 'tag-tap');
+          sendRaw(`badge:wa:${count}`);
+        } else {
+          log('SYNC', 'WhatsApp has 0 unread chats. Restoring WA button.', 'tag-sys');
+          sendRaw('badge:wa:0');
+        }
+      }
+      break;
+    }
+  } catch (err) {
+    console.error('inspectWhatsAppUnread error:', err);
   }
 }
 

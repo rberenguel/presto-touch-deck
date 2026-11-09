@@ -40,8 +40,10 @@ print("[BLE INIT] Nordic UART Service registered successfully")
 ble_connected = False
 ble_connection = None
 active_notification = None
+current_time_str = ""
 deck_needs_redraw = False
 ble_enabled = True
+event_accumulator = []
 
 current_page_idx = 0
 page_active = True
@@ -60,7 +62,7 @@ def ble_send(data_str):
         print("[BLE TX WARN] Cannot send, not connected (conn={}, tx={})".format(ble_connection, tx_char))
 
 async def ble_rx_worker(connection):
-    global active_notification, deck_needs_redraw, current_page_idx, page_active, pages
+    global active_notification, current_time_str, deck_needs_redraw, current_page_idx, page_active, pages, event_accumulator
     print("[BLE RX] Worker listening for connection:", connection)
     while True:
         try:
@@ -72,12 +74,13 @@ async def ble_rx_worker(connection):
                 continue
 
             try:
-                msg = str(data, "utf-8").strip()
+                raw_msg = str(data, "utf-8")
             except Exception as dec_err:
                 print("[BLE RX ERROR] UTF-8 decode failed:", repr(dec_err))
                 continue
 
-            print("[BLE RX MSG RECEIVED]: {!r}".format(msg))
+            msg = raw_msg.strip()
+            print("[BLE RX MSG RECEIVED]: raw={!r}".format(raw_msg))
 
             # Compact commands (guaranteed to fit in single 20-byte BLE MTU packet)
             if msg.startswith("deck:") or msg.startswith("switch_deck:"):
@@ -96,23 +99,45 @@ async def ble_rx_worker(connection):
                     print("[BLE RX ACTION WARN] No deck matching {!r} found in pages".format(target))
 
             elif msg.startswith("badge:"):
-                count_str = msg.split(":", 1)[1].strip()
+                parts = msg.split(":")
+                if len(parts) >= 3:
+                    app_name = parts[1].strip().lower()
+                    count_str = parts[2].strip()
+                else:
+                    app_name = "gmail"
+                    count_str = parts[1].strip()
+
                 try:
                     count = int(count_str)
                 except Exception:
                     count = 0
-                print("[BLE RX ACTION] Set Gmail badge to: {}".format(count))
+
+                print("[BLE RX ACTION] Set badge: app={!r}, count={}".format(app_name, count))
                 for p in pages:
                     for b in p.get("buttons", []):
-                        if "gmail" in b.get("id", "").lower() or "gmail" in b.get("label", "").lower():
+                        b_id = b.get("id", "").lower()
+                        b_lbl = b.get("label", "").lower()
+
+                        is_match = False
+                        if app_name in ("gmail", "mail"):
+                            is_match = "gmail" in b_id or "gmail" in b_lbl
+                            base_label = "Gmail"
+                        elif app_name in ("wa", "whatsapp"):
+                            is_match = "whatsapp" in b_id or "wa" in b_id or "wa" in b_lbl or "whatsapp" in b_lbl
+                            base_label = "WA"
+                        else:
+                            is_match = app_name in b_id or app_name in b_lbl
+                            base_label = b.get("label", app_name)
+
+                        if is_match:
                             if count > 0:
-                                b["label"] = "Gmail ({})".format(count)
+                                b["label"] = "{} ({})".format(base_label, count)
                                 b["color"] = "alert"
                             else:
-                                b["label"] = "Gmail"
+                                b["label"] = base_label
                                 b["color"] = None
                             deck_needs_redraw = True
-                            print("[BLE RX ACTION] Updated button label to {!r}, color to {!r}".format(b["label"], b.get("color")))
+                            print("[BLE RX ACTION] Updated button: label={!r}, color={!r}".format(b["label"], b.get("color")))
 
             elif msg.startswith("btn:"):
                 parts = msg.split(":")
@@ -127,6 +152,82 @@ async def ble_rx_worker(connection):
                                 b["label"] = new_lbl
                                 b["color"] = new_col if new_col and new_col != "none" else None
                                 deck_needs_redraw = True
+
+            elif msg.startswith("time:"):
+                t_str = msg.split(":", 1)[1].strip()
+                if len(t_str) >= 4 and t_str != current_time_str:
+                    current_time_str = t_str
+                    deck_needs_redraw = True
+                    print("[BLE RX ACTION] Time updated:", current_time_str)
+
+            elif raw_msg.startswith("event:+"):
+                chunk = raw_msg[7:]
+                event_accumulator.append(chunk)
+                print("[BLE RX ACTION] Event chunk appended: {!r}, accumulated chunks={}".format(chunk, len(event_accumulator)))
+
+            elif msg == "event:eof":
+                full_evt = "".join(event_accumulator).replace("\\n", "\n").strip()
+                event_accumulator = []
+                print("[BLE RX ACTION] Event EOF received, full text: {!r}".format(full_evt))
+                is_clear = (not full_evt) or (full_evt.lower() in ("clear", "none"))
+
+                for p in pages:
+                    for b in p.get("buttons", []):
+                        b_id = b.get("id", "").lower()
+                        b_lbl = b.get("label", "").lower()
+                        b_def_lbl = b.get("default_label", "").lower()
+                        if "cal" in b_id or "calendar" in b_id or "cal" in b_lbl or "cal" in b_def_lbl:
+                            if "default_label" not in b:
+                                b["default_label"] = b.get("label", "Cal")
+                            if is_clear:
+                                b["label"] = b["default_label"]
+                                b["color"] = None
+                            else:
+                                b["label"] = full_evt
+                                b["color"] = "event"
+                            deck_needs_redraw = True
+                            print("[BLE RX ACTION] Calendar button updated: label={!r}, color={!r}".format(b["label"], b.get("color")))
+
+            elif msg == "event:clear":
+                event_accumulator = []
+                print("[BLE RX ACTION] Event clear received")
+                for p in pages:
+                    for b in p.get("buttons", []):
+                        b_id = b.get("id", "").lower()
+                        b_lbl = b.get("label", "").lower()
+                        b_def_lbl = b.get("default_label", "").lower()
+                        if "cal" in b_id or "calendar" in b_id or "cal" in b_lbl or "cal" in b_def_lbl:
+                            if "default_label" not in b:
+                                b["default_label"] = b.get("label", "Cal")
+                            b["label"] = b["default_label"]
+                            b["color"] = None
+                            deck_needs_redraw = True
+                            print("[BLE RX ACTION] Calendar button cleared: label={!r}".format(b["label"]))
+
+            elif msg.startswith("event:"):
+                # Single-packet backward compatibility
+                event_accumulator = []
+                raw_evt = msg.split(":", 1)[1].strip()
+                evt_text = raw_evt.replace("\\n", "\n")
+                is_clear = (not evt_text) or (evt_text.lower() in ("clear", "none"))
+                print("[BLE RX ACTION] Event update: is_clear={}, text={!r}".format(is_clear, evt_text))
+
+                for p in pages:
+                    for b in p.get("buttons", []):
+                        b_id = b.get("id", "").lower()
+                        b_lbl = b.get("label", "").lower()
+                        b_def_lbl = b.get("default_label", "").lower()
+                        if "cal" in b_id or "calendar" in b_id or "cal" in b_lbl or "cal" in b_def_lbl:
+                            if "default_label" not in b:
+                                b["default_label"] = b.get("label", "Cal")
+                            if is_clear:
+                                b["label"] = b["default_label"]
+                                b["color"] = None
+                            else:
+                                b["label"] = evt_text
+                                b["color"] = "event"
+                            deck_needs_redraw = True
+                            print("[BLE RX ACTION] Calendar button updated: label={!r}, color={!r}".format(b["label"], b.get("color")))
 
             # Standard JSON commands fallback
             elif msg.startswith("{") and msg.endswith("}"):
@@ -185,6 +286,7 @@ async def ble_peripheral_task():
         if not ble_enabled:
             await asyncio.sleep_ms(500)
             continue
+        rx_task = None
         try:
             print("[BLE PERIPHERAL] Advertising as 'Presto' (services=[{}], interval=250ms)...".format(UART_SERVICE_UUID))
             connection = await aioble.advertise(
@@ -200,9 +302,8 @@ async def ble_peripheral_task():
             rx_task = asyncio.create_task(ble_rx_worker(connection))
 
             print("[BLE PERIPHERAL] Awaiting disconnect from central...")
-            await connection.disconnected()
+            await connection.disconnected(timeout_ms=None)
             print("[BLE PERIPHERAL] Central disconnected")
-            rx_task.cancel()
 
         except asyncio.CancelledError:
             print("[BLE PERIPHERAL] Task cancelled")
@@ -212,8 +313,11 @@ async def ble_peripheral_task():
             await asyncio.sleep_ms(1000)
         finally:
             print("[BLE PERIPHERAL] Cleaning up connection...")
+            if rx_task:
+                rx_task.cancel()
             ble_connected = False
             ble_connection = None
+            event_accumulator = []
             deck_needs_redraw = True
             await asyncio.sleep_ms(500)
 
@@ -416,6 +520,8 @@ def send_text(text):
 # ---------------------------------------------------------
 # 2. Config Parser & SD/Flash Path Resolver
 # ---------------------------------------------------------
+deck_settings = {}
+
 def get_config_path():
     try:
         if "sd" in os.listdir("/"):
@@ -475,8 +581,10 @@ def load_config():
                 v = v.strip()
                 current_button[k] = v
 
+    global CURRENT_LAYOUT, deck_settings
     if "layout" in settings:
         CURRENT_LAYOUT = settings["layout"]
+    deck_settings = settings
 
     return pages, settings
 
@@ -535,6 +643,7 @@ pens = {}
 PEN_WHITE = display.create_pen(255, 255, 255)
 PEN_BLACK = display.create_pen(0, 0, 0)
 PEN_ALERT = display.create_pen(255, 160, 20)
+PEN_EVENT = display.create_pen(170, 70, 240)
 
 def apply_theme(idx):
     global current_theme_idx, pens
@@ -562,6 +671,12 @@ GAP_Y = 6
 
 def hit_test(x, y, bx, by, bw, bh):
     return (bx <= x < bx + bw) and (by <= y < by + bh)
+
+def text_width(txt, scale):
+    try:
+        return display.measure_text(txt, scale)
+    except Exception:
+        return len(txt) * (6 if scale == 1 else 12)
 
 # ---------------------------------------------------------
 # 4. Wi-Fi Access Point & Web Config Server
@@ -780,18 +895,13 @@ async def run_settings():
     in_settings = True
     config_changed = False
 
+    actions = ["theme", "brightness", "wifi", "back"]
+
     while in_settings:
         touch.poll()
         is_touching = (touch.state in (touch.STATE_DOWN, touch.STATE_CONTACT))
         tx = touch.x
         ty = touch.y
-
-        s_rows = [
-            {"label": f"Theme: {THEMES[current_theme_idx]['name']}", "act": "theme"},
-            {"label": f"Brightness: {int(current_brightness_val * 100)}%", "act": "brightness"},
-            {"label": "Wi-Fi Config AP", "act": "wifi"},
-            {"label": "Back to Deck", "act": "back"},
-        ]
 
         if is_touching:
             if not was_touching:
@@ -802,7 +912,7 @@ async def run_settings():
                         active_row = idx
                         needs_redraw = True
 
-                        act = s_rows[idx]["act"]
+                        act = actions[idx]
                         if act == "theme":
                             apply_theme(current_theme_idx + 1)
                         elif act == "brightness":
@@ -841,6 +951,13 @@ async def run_settings():
             display.set_pen(pens["border"])
             display.line(0, HEADER_H, WIDTH, HEADER_H)
 
+            s_rows = [
+                {"label": f"Theme: {THEMES[current_theme_idx]['name']}"},
+                {"label": f"Brightness: {int(current_brightness_val * 100)}%"},
+                {"label": "Wi-Fi Config AP"},
+                {"label": "Back to Deck"},
+            ]
+
             for idx, row in enumerate(s_rows):
                 by = 48 + idx * 46
                 is_active = (active_row == idx)
@@ -872,24 +989,30 @@ def render_deck(page, active_btn_idx, buttons):
 
     # Bluetooth Indicator in Header (top right)
     display.set_pen(pens["accent"] if ble_connected else pens["border"])
-    display.text("BT", WIDTH - 28, 12, 26, 2)
+    display.text("BT", WIDTH - 26, 12, 24, 2)
+
+    # Clock in Header (next to BT indicator)
+    if current_time_str:
+        display.set_pen(pens["text"])
+        display.text(current_time_str, WIDTH - 82, 12, 54, 2)
 
     # Title & Notification Pill
     title = page.get("title", "Workspace")
+    right_margin = 86 if current_time_str else 32
     if active_notification:
         # Title on left
         display.set_pen(pens["text"])
-        display.text(title, 12, 12, 68, 2)
+        display.text(title, 12, 12, 56, 2)
 
         # Alert pill in center
-        ax, ay, aw, ah = 84, 6, 122, 28
+        ax, ay, aw, ah = 72, 6, 80, 28
         display.set_pen(PEN_ALERT)
         display.rectangle(ax, ay, aw, ah)
         display.set_pen(PEN_BLACK)
-        display.text("! " + active_notification[:11], ax + 6, ay + 6, aw - 12, 2)
+        display.text("! " + active_notification[:8], ax + 6, ay + 6, aw - 12, 2)
     else:
         display.set_pen(pens["text"])
-        display.text(title, 16, 12, WIDTH - 48, 2)
+        display.text(title, 16, 12, WIDTH - right_margin, 2)
 
     display.set_pen(pens["border"])
     display.line(0, HEADER_H, WIDTH, HEADER_H)
@@ -906,15 +1029,138 @@ def render_deck(page, active_btn_idx, buttons):
             display.set_pen(pens["active"])
         elif b_color == "alert":
             display.set_pen(PEN_ALERT)
+        elif b_color == "event":
+            display.set_pen(PEN_EVENT)
         else:
             display.set_pen(pens["btn"])
         display.rectangle(b["x"], b["y"], b["w"], b["h"])
 
         if b_color == "alert" and not is_pressed:
             display.set_pen(PEN_BLACK)
+        elif b_color == "event" and not is_pressed:
+            display.set_pen(PEN_WHITE)
         else:
             display.set_pen(pens["text"])
-        display.text(b["def"].get("label", b["def"]["id"]), b["x"] + 6, b["y"] + (b["h"] // 2) - 4, b["w"] - 12, 2)
+
+        # Smart Multiline Centered Text Placement
+        lbl = b["def"].get("label", b["def"]["id"]).replace("\\n", "\n")
+
+        if b_color == "event":
+            # Event button: Time on top (scale 2), Title below in smaller font (scale 1)
+            if "\n" in lbl:
+                parts = [p.strip() for p in lbl.split("\n", 1) if p.strip()]
+                time_str = parts[0]
+                desc_str = parts[1] if len(parts) > 1 else ""
+            else:
+                parts = lbl.split(" ", 1)
+                time_str = parts[0]
+                desc_str = parts[1] if len(parts) > 1 else ""
+
+            # Word wrap title at ~16 characters per line
+            desc_lines = []
+            cur_line = ""
+            for word in desc_str.split():
+                if len(cur_line) + len(word) + (1 if cur_line else 0) <= 16:
+                    cur_line = (cur_line + " " + word).strip()
+                else:
+                    if cur_line:
+                        desc_lines.append(cur_line)
+                    while len(word) > 16:
+                        desc_lines.append(word[:16])
+                        word = word[16:]
+                    cur_line = word
+            if cur_line:
+                desc_lines.append(cur_line)
+
+            if len(desc_lines) <= 1:
+                display.text(time_str, b["x"] + 6, b["y"] + 11, b["w"] - 12, 2)
+                if desc_lines:
+                    display.text(desc_lines[0], b["x"] + 6, b["y"] + 32, b["w"] - 12, 1)
+            elif len(desc_lines) == 2:
+                display.text(time_str, b["x"] + 6, b["y"] + 8, b["w"] - 12, 2)
+                display.text(desc_lines[0], b["x"] + 6, b["y"] + 27, b["w"] - 12, 1)
+                display.text(desc_lines[1], b["x"] + 6, b["y"] + 39, b["w"] - 12, 1)
+            else:
+                display.text(time_str, b["x"] + 6, b["y"] + 4, b["w"] - 12, 2)
+                display.text(desc_lines[0], b["x"] + 6, b["y"] + 20, b["w"] - 12, 1)
+                display.text(desc_lines[1], b["x"] + 6, b["y"] + 31, b["w"] - 12, 1)
+                display.text(desc_lines[2], b["x"] + 6, b["y"] + 42, b["w"] - 12, 1)
+        else:
+            if "\n" in lbl:
+                raw_lines = [l.strip() for l in lbl.split("\n") if l.strip()]
+            elif len(lbl) > 10 and " " in lbl and lbl.count(" ") == 1:
+                raw_lines = lbl.split(" ", 1)
+            else:
+                raw_lines = [lbl]
+
+            # Determine button font scale:
+            # 1. Per-button property: "font_size", "scale", or "size"
+            # 2. Global deck setting: "font_size" or "scale"
+            # 3. Auto-fit: if any line > 8 characters, scale down to 1
+            btn_cfg_scale = b["def"].get("font_size") or b["def"].get("scale") or b["def"].get("size")
+            global_cfg_scale = deck_settings.get("font_size") or deck_settings.get("scale")
+            chosen_scale_raw = btn_cfg_scale or global_cfg_scale
+
+            if chosen_scale_raw:
+                s_str = str(chosen_scale_raw).strip().lower()
+                if s_str in ("1", "small", "sm", "tiny", "min"):
+                    scale = 1
+                elif s_str in ("2", "normal", "medium", "default", "large", "lg"):
+                    scale = 2
+                else:
+                    try:
+                        scale = max(1, min(3, int(s_str)))
+                    except Exception:
+                        scale = 2
+            else:
+                # Auto-fit: scale 2 overflows 96px usable width if a line exceeds 8 characters
+                max_line_len = max(len(l) for l in raw_lines) if raw_lines else 0
+                if max_line_len > 8:
+                    scale = 1
+                else:
+                    scale = 2
+
+            num_lines = len(raw_lines)
+            if scale == 1:
+                if num_lines == 1:
+                    line_y = b["y"] + (b["h"] - 8) // 2
+                    w = text_width(raw_lines[0], 1)
+                    line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                    display.text(raw_lines[0], line_x, line_y, b["w"] - 12, 1)
+                elif num_lines == 2:
+                    start_y = b["y"] + (b["h"] - 20) // 2
+                    for li, line_txt in enumerate(raw_lines):
+                        w = text_width(line_txt, 1)
+                        line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                        display.text(line_txt, line_x, start_y + (li * 11), b["w"] - 12, 1)
+                else:
+                    line_h = 10
+                    total_h = num_lines * line_h
+                    start_y = b["y"] + max(4, (b["h"] - total_h) // 2)
+                    for li, line_txt in enumerate(raw_lines[:4]):
+                        w = text_width(line_txt, 1)
+                        line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                        display.text(line_txt, line_x, start_y + (li * line_h), b["w"] - 12, 1)
+            else:
+                if num_lines == 1:
+                    line_y = b["y"] + (b["h"] - 14) // 2
+                    w = text_width(raw_lines[0], 2)
+                    line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                    display.text(raw_lines[0], line_x, line_y, b["w"] - 12, 2)
+                elif num_lines == 2:
+                    start_y = b["y"] + (b["h"] - 30) // 2
+                    for li, line_txt in enumerate(raw_lines[:2]):
+                        w = text_width(line_txt, 2)
+                        line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                        display.text(line_txt, line_x, start_y + (li * 16), b["w"] - 12, 2)
+                else:
+                    line_h = 10
+                    total_h = num_lines * line_h
+                    start_y = b["y"] + max(4, (b["h"] - total_h) // 2)
+                    for li, line_txt in enumerate(raw_lines[:4]):
+                        w = text_width(line_txt, 1)
+                        line_x = b["x"] + max(6, (b["w"] - w) // 2)
+                        display.text(line_txt, line_x, start_y + (li * line_h), b["w"] - 12, 1)
 
     presto.update()
 

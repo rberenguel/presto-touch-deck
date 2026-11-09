@@ -3,6 +3,9 @@ import {
   disconnectPresto,
   switchDeck,
   sendRaw,
+  sendChunkedEvent,
+  syncTime,
+  setCalendarSchedule,
   registerCallbacks,
   setOptions
 } from './bridge.js';
@@ -14,6 +17,7 @@ const btnConnect = document.getElementById('btn-connect');
 const btnDisconnect = document.getElementById('btn-disconnect');
 const chkAutoSwitch = document.getElementById('chk-auto-switch');
 const chkMonitorUnread = document.getElementById('chk-monitor-unread');
+const chkMonitorWa = document.getElementById('chk-monitor-wa');
 const eventLog = document.getElementById('event-log');
 const btnClearLog = document.getElementById('btn-clear-log');
 const linkSidepanel = document.getElementById('link-sidepanel');
@@ -72,13 +76,16 @@ registerCallbacks(appendLog, updateStatusUI);
 btnConnect.addEventListener('click', connectPresto);
 btnDisconnect.addEventListener('click', disconnectPresto);
 
-chkAutoSwitch.addEventListener('change', () => {
-  setOptions(chkAutoSwitch.checked, chkMonitorUnread.checked);
-});
+function syncSettings() {
+  const autoSwitch = chkAutoSwitch ? chkAutoSwitch.checked : true;
+  const monGmail = chkMonitorUnread ? chkMonitorUnread.checked : true;
+  const monWa = chkMonitorWa ? chkMonitorWa.checked : true;
+  setOptions(autoSwitch, monGmail, monWa);
+}
 
-chkMonitorUnread.addEventListener('change', () => {
-  setOptions(chkAutoSwitch.checked, chkMonitorUnread.checked);
-});
+chkAutoSwitch.addEventListener('change', syncSettings);
+chkMonitorUnread.addEventListener('change', syncSettings);
+if (chkMonitorWa) chkMonitorWa.addEventListener('change', syncSettings);
 
 btnClearLog.addEventListener('click', () => {
   eventLog.innerHTML = '';
@@ -88,13 +95,62 @@ btnClearLog.addEventListener('click', () => {
 // Quick Deck Switching buttons
 btnDeckWorkspace.addEventListener('click', () => switchDeck('Workspace'));
 btnDeckGmail.addEventListener('click', () => switchDeck('Gmail'));
-btnDeckDev.addEventListener('click', () => switchDeck('Dev Deck'));
+if (btnDeckDev) btnDeckDev.addEventListener('click', () => switchDeck('Dev Deck'));
 
 const btnTestBadge2 = document.getElementById('btn-test-badge-2');
-if (btnTestBadge2) btnTestBadge2.addEventListener('click', () => sendRaw('badge:2'));
+if (btnTestBadge2) btnTestBadge2.addEventListener('click', () => sendRaw('badge:gmail:2'));
 
 const btnTestBadge0 = document.getElementById('btn-test-badge-0');
-if (btnTestBadge0) btnTestBadge0.addEventListener('click', () => sendRaw('badge:0'));
+if (btnTestBadge0) btnTestBadge0.addEventListener('click', () => sendRaw('badge:gmail:0'));
+
+const btnTestWa1 = document.getElementById('btn-test-wa-1');
+if (btnTestWa1) btnTestWa1.addEventListener('click', () => sendRaw('badge:wa:1'));
+
+const btnTestWa0 = document.getElementById('btn-test-wa-0');
+if (btnTestWa0) btnTestWa0.addEventListener('click', () => sendRaw('badge:wa:0'));
+
+const btnSyncTime = document.getElementById('btn-sync-time');
+if (btnSyncTime) btnSyncTime.addEventListener('click', () => syncTime(true));
+
+// Calendar Schedule UI
+const txtCalendar = document.getElementById('txt-calendar');
+const btnSaveCal = document.getElementById('btn-save-cal');
+const btnTestCalEvent = document.getElementById('btn-test-cal-event');
+const btnTestCalClear = document.getElementById('btn-test-cal-clear');
+
+// Load stored calendar schedule into textarea
+chrome.storage.local.get(['calendarSchedule'], (res) => {
+  if (res.calendarSchedule && txtCalendar) {
+    txtCalendar.value = res.calendarSchedule;
+  }
+});
+
+if (txtCalendar) {
+  txtCalendar.addEventListener('input', () => {
+    setCalendarSchedule(txtCalendar.value);
+  });
+}
+
+if (btnSaveCal) {
+  btnSaveCal.addEventListener('click', () => {
+    setCalendarSchedule(txtCalendar ? txtCalendar.value : '');
+    appendLog('CAL', 'Schedule saved and synchronized.', 'tag-tap');
+  });
+}
+
+if (btnTestCalEvent) {
+  btnTestCalEvent.addEventListener('click', () => {
+    sendChunkedEvent('21:25\\nSprint Retrospective & Team Sync');
+    appendLog('TEST', 'Sent test chunked calendar event: "21:25\\nSprint Retrospective & Team Sync"', 'tag-tap');
+  });
+}
+
+if (btnTestCalClear) {
+  btnTestCalClear.addEventListener('click', () => {
+    sendRaw('event:clear');
+    appendLog('TEST', 'Sent calendar clear', 'tag-sys');
+  });
+}
 
 // Side panel link
 if (linkSidepanel) {
